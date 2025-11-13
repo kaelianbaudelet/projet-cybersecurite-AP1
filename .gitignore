@@ -1,0 +1,4 @@
+# Ignore configuration, backup, and log directories
+/config
+/backups
+/logs

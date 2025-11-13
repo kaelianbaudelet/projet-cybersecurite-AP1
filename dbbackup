@@ -1,0 +1,187 @@
+#!/bin/bash
+
+# ============================================================================
+# DBBackup CLI - Système de sauvegarde automatisée MariaDB
+# ============================================================================
+# Point d'entrée principal pour le système de gestion des sauvegardes de bases de données
+# Prend en charge les sauvegardes manuelles, les sauvegardes planifiées, le chiffrement et la restauration
+# ============================================================================
+
+set -euo pipefail
+
+# Obtenir le répertoire du script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
+CONFIG_DIR="${SCRIPT_DIR}/config"
+LOG_DIR="${SCRIPT_DIR}/logs"
+
+# Importer les modules de la bibliothèque
+source "${LIB_DIR}/config.sh"
+source "${LIB_DIR}/remote.sh"
+source "${LIB_DIR}/backup.sh"
+source "${LIB_DIR}/encryption.sh"
+source "${LIB_DIR}/transfer.sh"
+source "${LIB_DIR}/schedule.sh"
+source "${LIB_DIR}/restore.sh"
+
+# Initialisation
+init_config
+
+# ============================================================================
+# Afficher les informations d'utilisation
+# ============================================================================
+show_help() {
+    cat << EOF
+DBBackup CLI v1.0
+
+UTILISATION :
+    dbbackup <commande> [options]
+
+COMMANDES :
+    backup                  Gérer les sauvegardes manuelles et lister les sauvegardes
+    restore                 Restaurer une base de données depuis une sauvegarde
+    schedule                Gérer les sauvegardes planifiées
+    remote                  Gérer les serveurs distants de transfert
+    config                  Afficher ou modifier la configuration
+    help, -h, --help        Afficher ce message d'aide
+
+COMMANDES DE SAUVEGARDE :
+    dbbackup backup [options]
+        -h, --host          Hôte de la base de données (défaut : localhost)
+        -P, --port          Port de la base de données (défaut : 3306)
+        -u, --user          Utilisateur de la base (obligatoire)
+        -p, --password      Mot de passe de la base (obligatoire)
+        -d, --database      Nom de la base (obligatoire)
+        -o, --output        Répertoire de sortie (défaut : ./backups)
+        --encrypt           Activer le chiffrement (défaut : oui)
+        --transfer          Transférer vers un serveur distant (défaut : non)
+        --no-encrypt        Désactiver le chiffrement
+        --no-transfer       Désactiver le transfert distant
+        --remote <nom>      Choisir le serveur distant à utiliser (force le transfert)
+
+    dbbackup backup list [options]
+        -o, --output        Répertoire local à inspecter (défaut : BACKUP_DIR)
+
+COMMANDES DE RESTAURATION :
+    dbbackup restore [options]
+        -f, --file          Fichier de sauvegarde à restaurer (obligatoire)
+        -h, --host          Hôte de la base de données (défaut : localhost)
+        -P, --port          Port de la base de données (défaut : 3306)
+        -u, --user          Utilisateur de la base (obligatoire)
+        -p, --password      Mot de passe de la base (obligatoire)
+        -d, --database      Nom de la base cible (obligatoire)
+
+COMMANDES DE PLANIFICATION :
+    dbbackup schedule add [options]
+        Ajouter une nouvelle sauvegarde planifiée
+        -n, --name          Nom de la planification (obligatoire)
+        -c, --cron          Expression cron (obligatoire)
+        -h, --host          Hôte de la base de données
+        -u, --user          Utilisateur de la base (obligatoire)
+        -p, --password      Mot de passe de la base (obligatoire)
+        -d, --database      Nom de la base (obligatoire)
+
+    dbbackup schedule list
+        Lister toutes les sauvegardes planifiées
+
+    dbbackup schedule remove <nom>
+        Supprimer une sauvegarde planifiée par nom
+
+    dbbackup schedule modify <nom> [options]
+        Modifier une planification existante
+        -c, --cron          Nouvelle expression cron
+        -h, --host          Nouvel hôte de base de données
+        -u, --user          Nouvel utilisateur de la base
+        -p, --password      Nouveau mot de passe de la base
+        -d, --database      Nouveau nom de base
+
+    dbbackup schedule enable <nom>
+        Activer une sauvegarde planifiée
+
+    dbbackup schedule disable <nom>
+        Désactiver une sauvegarde planifiée
+
+COMMANDES DE CONFIGURATION :
+    dbbackup config show
+        Afficher la configuration actuelle
+
+COMMANDES DE SERVEUR DISTANT :
+    dbbackup remote list/add/remove/show/set-default/test
+        Administrer les serveurs distants utilisés pour les transferts
+
+EXEMPLES :
+    # Sauvegarde locale simple
+    dbbackup backup -u root -p secret -d mydb
+
+    # Sauvegarde avec transfert vers le serveur 'prod'
+    dbbackup backup -u root -p secret -d mydb --remote prod
+
+    # Planifier une sauvegarde quotidienne à 2h du matin
+    dbbackup schedule add -n "daily-backup" -c "0 2 * * *" \\
+        -u root -p secret -d mydb
+
+    # Lister toutes les planifications
+    dbbackup schedule list
+
+    # Restaurer une sauvegarde
+    dbbackup restore -f backup.sql.gz.enc -u root -p secret -d mydb
+
+CHIFFREMENT :
+    Toutes les sauvegardes sont chiffrées en AES-256-CBC par défaut.
+    La clé de chiffrement est stockée dans : ${CONFIG_DIR}/encryption.key
+
+INTÉGRITÉ :
+    Des sommes de contrôle SHA256 sont générées pour toutes les sauvegardes afin de vérifier leur intégrité.
+
+TRANSFERT :
+    Les sauvegardes sont transférées localement par défaut.
+    Configurez les serveurs distants avec : dbbackup remote <commande>
+    Définissez un serveur distant par défaut via : dbbackup remote set-default <nom>
+
+LOGS :
+    Toutes les opérations sont enregistrées dans : ${LOG_DIR}/
+
+EOF
+}
+
+# ============================================================================
+# Main command dispatcher
+# ============================================================================
+main() {
+    if [[ $# -eq 0 ]]; then
+        show_help
+        exit 0
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        backup)
+            cmd_backup "$@"
+            ;;
+        restore)
+            cmd_restore "$@"
+            ;;
+        schedule)
+            cmd_schedule "$@"
+            ;;
+        remote)
+            cmd_remote "$@"
+            ;;
+        config)
+            cmd_config "$@"
+            ;;
+        help|--help)
+            show_help
+            ;;
+        *)
+            echo "Erreur : Commande inconnue '$command'"
+            echo "Exécutez 'dbbackup --help' pour obtenir des informations d'utilisation"
+            exit 1
+            ;;
+    esac
+}
+
+# Exécution de la fonction principale
+main "$@"

@@ -1,0 +1,12 @@
+./dbbackup --help
+
+./dbbackup remote add prodserver --host '172.16.252.142' --user afi --auth password --password 'test1234' --path '/backup' --set-default
+./dbbackup remote list
+
+./dbbackup schedule add -n "TEST" -c "* * * * *" -u "mon_user" -p "mon_pass" -d "ma_base" --remote prodserver
+./dbbackup schedule list
+
+./dbbackup backup -u "mon_user" -p "mon_pass" -d "ma_base" --remote prodserver
+./dbbackup backup list --remote prodserver
+
+./dbbackup restore -f '/Users/kaelian/Desktop/Projet AP1/dbbackup-cli/backups/[SAUVEGARDE].sql.gz.enc' -u "mon_user" -d "ma_base" -p "mon_pass"
